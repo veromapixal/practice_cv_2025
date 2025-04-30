@@ -1,0 +1,6 @@
+streamlit
+torch
+ultralytics
+opencv-python
+pillow
+fpdf==1.7.2
