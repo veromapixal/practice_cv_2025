@@ -66,6 +66,11 @@ if page == "Изображение":
             img_np = np.array(image)
             img_result, bear_count, logs = detect_and_display(img_np)
 
+            # Сохраняем оригинальное изображение в папку data
+            original_path = os.path.join("data", f"{uuid.uuid4()}_{uploaded_file.name}")
+            with open(original_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+
             result_path = os.path.join("data", f"{uuid.uuid4()}_processed.jpg")
             Image.fromarray(img_result).save(result_path)
 
@@ -78,12 +83,13 @@ if page == "Изображение":
             save_history({
                 "type": "image",
                 "filename": uploaded_file.name,
-                "original_path": os.path.join("data", uploaded_file.name),
+                "original_path": original_path,
                 "processed_path": result_path,
                 "bear_count": bear_count,
                 "timestamp": datetime.now().isoformat(),
                 "detection_logs": logs
             })
+
 
 # 2. Видео
 elif page == "Видео":
@@ -159,7 +165,51 @@ elif page == "Видео":
 
 # 3. Камера
 elif page == "Камера":
-    st.warning("Поток с камеры через Streamlit ограничен. Лучше использовать отдельное локальное приложение.")
+    st.header("🎥 Поток с веб-камеры")
+    run_camera = st.checkbox("✅ Запустить камеру")
+    stop_camera = st.checkbox("⏹️ Остановить камеру")
+
+    if run_camera and not stop_camera:
+        cap = cv2.VideoCapture(0)
+        stframe = st.empty()
+        bear_counter_placeholder = st.empty()
+
+        total_bears_camera = 0
+        detection_logs_camera = []
+        frame_idx = 0
+
+        while cap.isOpened() and not stop_camera:
+            ret, frame = cap.read()
+            if not ret:
+                st.error("Не удалось подключиться к камере.")
+                break
+
+            img_result, bear_count, logs = detect_and_display(frame)
+            total_bears_camera += bear_count
+
+            for log in logs:
+                detection_logs_camera.append(f"Кадр {frame_idx}: {log}")
+            frame_idx += 1
+
+            bear_counter_placeholder.metric("🐻 Найдено медведей", total_bears_camera)
+            stframe.image(img_result, channels="BGR", use_container_width=True)
+
+            # Обновляем значение stop_camera
+            stop_camera = st.session_state.get("⏹️ Остановить камеру", False)
+
+        cap.release()
+        st.success(f"Поток остановлен. Всего найдено медведей: {total_bears_camera}")
+
+        # Сохраняем в историю
+        save_history({
+            "type": "camera",
+            "filename": "webcam_stream",
+            "original_path": "",
+            "processed_path": "",
+            "bear_count": total_bears_camera,
+            "timestamp": datetime.now().isoformat(),
+            "detection_logs": detection_logs_camera
+        })
 
 # 4. История
 elif page == "История":
@@ -178,7 +228,10 @@ elif page == "История":
                 with open(report_path, "rb") as f:
                     st.download_button("📥 Скачать отчет в PDF", f, file_name="history_report.pdf", mime="application/pdf")
 
+        updated_history = history.copy()
+
         for idx, record in enumerate(reversed(history)):
+            record_idx = len(history) - 1 - idx  # индекс в оригинальной истории
             with st.expander(f"{record['type'].capitalize()}: {record['filename']}"):
                 st.text(f"Файл: {record['filename']}")
                 st.text(f"Медведей найдено: {record['bear_count']}")
@@ -188,29 +241,47 @@ elif page == "История":
                     col1, col2 = st.columns(2)
                     with col1:
                         if os.path.exists(record["original_path"]):
-                            st.image(record["original_path"], use_container_width=True)
+                            st.image(record["original_path"], use_container_width=True, caption="Оригинал")
                         else:
-                            st.error("Оригинальный файл отсутствует.")
+                            st.warning("Оригинальный файл не найден.")
 
                     with col2:
                         if os.path.exists(record["processed_path"]):
-                            st.image(record["processed_path"], use_container_width=True)
+                            st.image(record["processed_path"], use_container_width=True, caption="Результат")
                         else:
-                            st.error("Файл с обработанным изображением отсутствует.")
+                            st.warning("Обработанный файл не найден.")
 
                 elif record["type"] == "video":
                     if os.path.exists(record["original_path"]):
                         st.video(record["original_path"])
                     else:
-                        st.error("Оригинальное видео отсутствует.")
+                        st.warning("Оригинальное видео не найдено.")
 
                     if os.path.exists(record["processed_path"]):
                         st.video(record["processed_path"])
                     else:
-                        st.error("Файл с обработанным видео отсутствует.")
+                        st.warning("Обработанное видео не найдено.")
+
+                # Кнопка удаления конкретной записи
+                if st.button(f"🗑️ Удалить запись {record['filename']}", key=f"delete_{idx}"):
+                    try:
+                        if os.path.exists(record["original_path"]):
+                            os.remove(record["original_path"])
+                        if os.path.exists(record["processed_path"]):
+                            os.remove(record["processed_path"])
+                    except Exception as e:
+                        st.error(f"Ошибка при удалении файлов: {str(e)}")
+
+                    # Удаляем из истории
+                    del updated_history[record_idx]
+                    with open(os.path.join("history", "history.json"), "w", encoding="utf-8") as f:
+                        json.dump(updated_history, f, indent=4, ensure_ascii=False)
+                    st.success(f"Запись '{record['filename']}' удалена!")
+                    st.rerun()
 
         if st.button("🗑️ Очистить всю историю"):
             clear_history()
             st.success("История очищена!")
     else:
         st.info("История пока пуста.")
+
